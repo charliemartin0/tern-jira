@@ -1,0 +1,11 @@
+{
+  "id": 17,
+  "columnConfig": {
+    "columns": [
+      { "name": "To Do", "statuses": [{ "id": "10002" }] },
+      { "name": "In Progress", "statuses": [{ "id": "10000" }] },
+      { "name": "Review", "statuses": [{ "id": "10001" }] },
+      { "name": "Done", "statuses": [{ "id": "10003" }] }
+    ]
+  }
+}

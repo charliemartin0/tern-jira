@@ -1,6 +1,6 @@
 --!strict
 -- The `issues` block: my assigned Jira issues in the active sprint(s),
--- grouped by status category, refreshed on a timer.
+-- grouped by Jira status (in board column order), refreshed on a timer.
 -- Keys: r refresh.
 -- Launch args (dev only): `fixture` reads test/fixtures instead of calling
 -- Jira; a second arg picks the variant: `signedout`, `empty` or `error`.
@@ -15,6 +15,7 @@ local ENV_VARS = { "JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN" }
 local FIXTURE_NOW = jira.epoch("2026-10-07T10:00:00Z") :: number
 
 type Category = "new" | "indeterminate" | "done"
+type Group = { name: string, category: Category, rank: number, order: number, issues: { jira.Issue } }
 type Signin = "missing" | "rejected"
 
 type State = {
@@ -32,6 +33,7 @@ type State = {
 	cfg: config.Config,
 	cfg_error: string?,
 	timer: TimerHandle?,
+	ranks: { [string]: number },
 }
 
 -- A pane ID survives Restart; the state object identifies this block run.
@@ -181,7 +183,7 @@ local function refresh(state: State)
 		end
 		state.loading = false
 		if result then
-			state.issues, state.sprints = result.issues, result.sprints
+			state.issues, state.sprints, state.ranks = result.issues, result.sprints, result.ranks
 			state.fetched = now(state)
 			state.problem, state.signin = nil, nil
 			publish(state, open_count(result.issues))
@@ -217,11 +219,7 @@ schedule = function(state: State)
 end
 
 -- ---------- views ----------
-local CATEGORIES: { { id: Category, title: string } } = {
-	{ id = "new", title = "To Do" },
-	{ id = "indeterminate", title = "In Progress" },
-	{ id = "done", title = "Done" },
-}
+local CATEGORY_ORDER: { [Category]: number } = { new = 1, indeterminate = 2, done = 3 }
 local STATUS_TONE: { [string]: string } = { new = "neutral", indeterminate = "info", done = "success" }
 local PRIORITY_STYLE: { [string]: string } = {
 	highest = "error strong", blocker = "error strong", critical = "error strong",
@@ -333,19 +331,41 @@ local function empty_card(): Node
 	)
 end
 
+-- Each actual Jira status gets its own section, regardless of its category.
+-- Unmapped statuses follow board statuses, retaining JQL order within category.
+local function groups(issues: { jira.Issue }, ranks: { [string]: number }): { Group }
+	local by_name: { [string]: Group } = {}
+	local list: { Group } = {}
+	for _, issue in issues do
+		local group = by_name[issue.status]
+		if not group then
+			group = { name = issue.status, category = issue.category, rank = math.huge, order = #list + 1, issues = {} }
+			by_name[issue.status] = group
+			table.insert(list, group)
+		end
+		table.insert(group.issues, issue)
+		local rank = if issue.status_id then ranks[issue.status_id] else nil
+		if rank and rank < group.rank then
+			group.rank = rank
+		end
+	end
+	table.sort(list, function(a, b)
+		if a.rank ~= b.rank then return a.rank < b.rank end
+		if a.category ~= b.category then return CATEGORY_ORDER[a.category] < CATEGORY_ORDER[b.category] end
+		return a.order < b.order
+	end)
+	return list
+end
+
 local function sections(state: State, issues: { jira.Issue }): { Node }
 	local out: { Node } = {}
-	for _, category in CATEGORIES do
+	for _, group in groups(issues, state.ranks) do
 		local rows: { Node } = {}
-		for _, issue in issues do
-			if issue.category == category.id then
-				table.insert(rows, issue_row(state, issue))
-			end
+		for _, issue in group.issues do
+			table.insert(rows, issue_row(state, issue))
 		end
-		if #rows > 0 then
-			local head: { Span | string } = { ui.span(category.title, "strong"), ui.span("  " .. #rows, "muted num") }
-			table.insert(out, with(ui.section(head, rows), { key = "cat-" .. category.id, collapsible = true }))
-		end
+		local head: { Span | string } = { ui.span(group.name, "strong"), ui.span("  " .. #rows, "muted num") }
+		table.insert(out, with(ui.section(head, rows), { key = "status-" .. group.name, collapsible = true }))
 	end
 	return out
 end
@@ -398,6 +418,7 @@ tern.block.define("issues", {
 			cfg = cfg,
 			cfg_error = cfg_error,
 			timer = nil,
+			ranks = {},
 		}
 		running[cx.pane] = state
 		refresh(state)

@@ -10,11 +10,12 @@ export type Auth = { base_url: string, email: string, token: string }
 export type Problem = { kind: "auth" | "network" | "http" | "parse", message: string }
 export type Issue = {
 	key: string, summary: string, url: string,
-	status: string, category: "new" | "indeterminate" | "done",
+	status: string, status_id: string?, category: "new" | "indeterminate" | "done",
 	priority: string, issue_type: string, points: string?, updated: number,
 }
-export type Sprint = { id: number, name: string, ends: number? }
-export type Result = { issues: { Issue }, sprints: { Sprint } }
+export type Sprint = { id: number, name: string, ends: number?, board: number? }
+-- `ranks` maps a status id to its position in the sprint boards' column order.
+export type Result = { issues: { Issue }, sprints: { Sprint }, ranks: { [string]: number } }
 
 local UA = "tern-jira/0.1.0"
 local PAGE_SIZE = 100
@@ -167,6 +168,7 @@ local function parse(data: any, base: string, points_ids: { string }, sprint_id:
 			summary = tostring(f.summary or ""),
 			url = base .. "/browse/" .. raw.key,
 			status = tostring(status.name or "Unknown"),
+			status_id = if type(status.id) == "string" or type(status.id) == "number" then tostring(status.id) else nil,
 			category = if cat == "done" then "done" elseif cat == "indeterminate" then "indeterminate" else "new",
 			priority = if type(f.priority) == "table" then tostring(f.priority.name or "") else "",
 			issue_type = if type(f.issuetype) == "table" then tostring(f.issuetype.name or "") else "",
@@ -178,13 +180,13 @@ local function parse(data: any, base: string, points_ids: { string }, sprint_id:
 			for _, sp in list do
 				if type(sp) == "table" and sp.state == "active" and type(sp.id) == "number" and type(sp.name) == "string" and not seen[sp.id] then
 					seen[sp.id] = true
-					table.insert(sprints, { id = sp.id, name = sp.name, ends = M.epoch(sp.endDate) })
+					table.insert(sprints, { id = sp.id, name = sp.name, ends = M.epoch(sp.endDate), board = if type(sp.boardId) == "number" then sp.boardId else nil })
 				end
 			end
 		end
 	end
 	table.sort(sprints, function(a, b) return a.id < b.id end)
-	return { issues = issues, sprints = sprints }
+	return { issues = issues, sprints = sprints, ranks = {} }
 end
 
 local function read_fixture(name: string): any?
@@ -194,6 +196,59 @@ local function read_fixture(name: string): any?
 	return if decoded and type(data) == "table" then data else nil
 end
 
+-- Adds the status ids of a board configuration to `ranks` in board order:
+-- 1 is the leftmost column; statuses sharing a column keep their listed order.
+-- Statuses already ranked (by an earlier board) keep their rank.
+local function add_ranks(ranks: { [string]: number }, config: any)
+	local columns = if type(config) == "table" and type(config.columnConfig) == "table" then config.columnConfig.columns else nil
+	if type(columns) ~= "table" then return end
+	local next_rank = 1
+	for _ in ranks do next_rank += 1 end
+	for _, column in columns do
+		local statuses = if type(column) == "table" then column.statuses else nil
+		if type(statuses) ~= "table" then continue end
+		for _, status in statuses do
+			local id = if type(status) == "table" then status.id else nil
+			if (type(id) == "string" or type(id) == "number") and ranks[tostring(id)] == nil then
+				ranks[tostring(id)] = next_rank
+				next_rank += 1
+			end
+		end
+	end
+end
+
+-- Board column order for the boards of the active sprints, one configuration
+-- request per board. Fails soft: with no order the view falls back to status
+-- category order, so an unreadable board only costs the ordering.
+local function load_ranks(auth: Auth, sprints: { Sprint }, alive: (() -> boolean)?, done: ({ [string]: number }) -> ())
+	local ranks: { [string]: number } = {}
+	local boards: { number } = {}
+	local seen: { [number]: boolean } = {}
+	for _, sprint in sprints do
+		if sprint.board and not seen[sprint.board] then
+			seen[sprint.board] = true
+			table.insert(boards, sprint.board)
+		end
+	end
+	local index = 0
+	local step: () -> ()
+	step = function()
+		if alive and not alive() then return end
+		index += 1
+		local board = boards[index]
+		if not board then
+			done(ranks)
+			return
+		end
+		request(auth, "GET", string.format("/rest/agile/1.0/board/%d/configuration", board), nil, function(config, _)
+			if alive and not alive() then return end
+			add_ranks(ranks, config)
+			step()
+		end)
+	end
+	step()
+end
+
 -- Loads my issues for `jql`. `fixture` names a search response in
 -- test/fixtures to read instead of calling Jira. done(result?, problem?).
 function M.load(auth: Auth, jql: string, fixture: string?, done: (Result?, Problem?) -> (), alive: (() -> boolean)?)
@@ -201,7 +256,12 @@ function M.load(auth: Auth, jql: string, fixture: string?, done: (Result?, Probl
 		local points_ids, sprint_id = field_ids(read_fixture("fields.json"))
 		local data = read_fixture(fixture)
 		local result = if data then parse(data, auth.base_url, points_ids, sprint_id) else nil
-		if result then done(result, nil) else done(nil, { kind = "parse", message = "fixture " .. fixture .. " missing or invalid" }) end
+		if result then
+			add_ranks(result.ranks, read_fixture("board.json"))
+			done(result, nil)
+		else
+			done(nil, { kind = "parse", message = "fixture " .. fixture .. " missing or invalid" })
+		end
 		return
 	end
 	request(auth, "GET", "/rest/api/3/field", nil, function(fields, field_problem)
@@ -243,7 +303,15 @@ function M.load(auth: Auth, jql: string, fixture: string?, done: (Result?, Probl
 					seen_tokens[next_token] = true
 					page(next_token)
 				else
-					done(parse({ issues = issues }, auth.base_url, points_ids, sprint_id), nil)
+					local result = parse({ issues = issues }, auth.base_url, points_ids, sprint_id)
+					if not result then
+						done(nil, { kind = "parse", message = "Jira's search response had no issue list." })
+						return
+					end
+					load_ranks(auth, result.sprints, alive, function(ranks)
+						result.ranks = ranks
+						done(result, nil)
+					end)
 				end
 			end)
 		end
