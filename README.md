@@ -7,8 +7,6 @@ Your Jira sprint, inside [Tern](https://docs.stencil.so/tern/). A read-only bloc
 
 Works with Jira Cloud REST API v3 using your Atlassian email and API token. No Jira CLI, project key, board ID or company-specific setup is required.
 
-![Jira issues in the active sprint](test/screenshots/issues.png)
-
 ## Requirements
 
 - Tern 0.6.0 or newer.
@@ -29,7 +27,7 @@ Set up authentication below, then press `r` or **Refresh**. Host-side environmen
 
 ## What it does
 
-- **Jira block**: issues matching the configured JQL, grouped by Jira status category (`To Do`, `In Progress`, `Done`) with a count per group.
+- **Jira block**: issues matching the configured JQL, grouped by their actual Jira status names with a count per group. Custom statuses such as `Review` have their own sections, even when Jira categorizes them as `To Do`. Only statuses with matching issues are shown.
 - **Each row**: issue key and summary link on the first line; status, priority, issue type, story points when present, updated age and actions on a wrapping metadata line. Narrow panes keep the summary readable.
 - **Row actions**: Open in Jira and Copy key. The row actions use a small action registry in `host.luau` so additional actions can be added independently.
 - **Header**: active sprint name(s) and end date when Jira includes them in the issue's sprint field, last updated time, `r` refresh hint and a Refresh button.
@@ -44,7 +42,9 @@ The default query is:
 assignee = currentUser() AND sprint in openSprints() ORDER BY status, priority DESC, updated DESC
 ```
 
-The plugin uses `POST /rest/api/3/search/jql` and follows its pagination tokens, so group and status-line counts include every returned issue. It reads Jira story-point and sprint field IDs from `/rest/api/3/field`; it does not hard-code custom field IDs. Both company-managed `Story Points` and team-managed `Story point estimate` fields are supported. Story points are optional. Sprint name/end dates come from the issue's sprint field; no Agile API request is made.
+The plugin uses `POST /rest/api/3/search/jql` and follows its pagination tokens, so group and status-line counts include every returned issue. It reads Jira story-point and sprint field IDs from `/rest/api/3/field`; it does not hard-code custom field IDs. Both company-managed `Story Points` and team-managed `Story point estimate` fields are supported. Story points are optional. Sprint name/end dates come from the issue's sprint field.
+
+When active sprints include a board ID, the plugin reads `/rest/agile/1.0/board/{id}/configuration` once per board per refresh to order status sections by board columns. For multiple boards, the first board (by sprint ID) establishes the order; previously unseen statuses from later boards follow. Statuses absent from the board configuration follow the mapped statuses in category order, retaining JQL order within each category. If board IDs are missing or configurations cannot be read, all sections use that fallback order. Section names and membership always come from actual issue statuses, not categories or column names. Categories still control badge colors and the non-done status-line count.
 
 ## Sign in
 
@@ -73,6 +73,7 @@ On first open, the plugin creates `config.json` in Tern's Jira plugin data direc
 | `base_url` | `""` | Jira Cloud site URL; overridden by `JIRA_BASE_URL`. A bare hostname is accepted. |
 | `email` | `""` | Atlassian account email; overridden by `JIRA_EMAIL`. |
 | `jql` | `"assignee = currentUser() AND sprint in openSprints() ORDER BY status, priority DESC, updated DESC"` | Search query sent to Jira. |
+| `hidden_statuses` | `[]` | Status names to leave out, matched case-insensitively against the issue's status name. Hidden issues have no section and are excluded from the block title and status-line counts. Non-string entries are ignored. Use `jql` instead to exclude them server-side. |
 | `poll_minutes` | `5` | Automatic refresh interval, clamped to 1–60 minutes. |
 
 Example (do not put an API token in this file):
@@ -82,6 +83,7 @@ Example (do not put an API token in this file):
   "base_url": "https://your-site.atlassian.net",
   "email": "you@example.com",
   "jql": "assignee = currentUser() AND sprint in openSprints() ORDER BY status, priority DESC, updated DESC",
+  "hidden_statuses": ["Rejected"],
   "poll_minutes": 5
 }
 ```
@@ -126,7 +128,7 @@ tern ctl --control /tmp/jira.sock shot issues
 
 Float the test window and size its content to 1920×1080 physical pixels
 (1536×864 logical pixels at display scale 1.25). Check the saved PNG with
-`identify`, and copy it from `target/shots/tern/live/` to `test/screenshots/`.
+`identify`. Keep QA captures outside the repository.
 Use a fresh window and a unique control socket for each variant.
 
 API and refresh-state regressions (requires Python 3 and the
@@ -138,8 +140,10 @@ python3 test/smoke.py --luau luau
 
 This executes the actual Luau modules with deterministic HTTP/UI boundaries:
 mixed story-point fields, multi-page/deduplicated results, optional fields,
-auth failures, invalid cursors, closed panes, HTTPS, timezone offsets and
-sign-in/refresh recovery. It does not authenticate to a live Jira site.
+auth failures, invalid cursors, closed panes, HTTPS, timezone offsets,
+sign-in/refresh recovery, custom-status grouping (including `Review` in Jira's
+`To Do` category), and board ordering/deduplication/fallback. It does not
+authenticate to a live Jira site.
 
 The **Plugin checks** GitHub Actions job compiles the four Luau modules and runs this regression harness on pushes and pull requests. It needs no Jira credentials or running Tern daemon; it is not a live Jira API or GUI test.
 
@@ -150,9 +154,7 @@ luau-compile --null config.luau jira.luau host.luau window.luau
 python3 test/smoke.py --luau luau
 ```
 
-Fixture screenshots in `test/screenshots/` (`issues.png`, `signin.png`,
-`empty.png`) are captured at 1920×1080. Run `tern plugin types .`
-to regenerate the checked-in SDK declarations.
+Run `tern plugin types .` to regenerate the checked-in SDK declarations.
 
 ## License
 

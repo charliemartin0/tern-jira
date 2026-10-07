@@ -208,12 +208,95 @@ assert(state.problem and #state.issues == 7 and state.signin == nil)
 -- Fixtures have a separate summary and signed-out cannot keep an old count.
 state = block.init(cx, { "fixture" }, nil)
 assert(summaries.fixture_summary.count == 5 and state.issues[1].points == "5")
+
+-- Review has category "new", but must never share the To Do section.
+local function expect_sections(state, expected)
+    local sections = block.view(state, cx).main.c
+    assert(#sections == #expected + 1, "wrong number of status sections")
+    for i, group in expected do
+        local section = sections[i + 1]
+        assert(section.p.head[1].t == group.name, "wrong status heading")
+        assert(#section.c == #group.keys, "wrong issue count for " .. group.name)
+        for j, key in group.keys do
+            assert(section.c[j].p.key == key, key .. " in wrong status group or JQL order")
+        end
+    end
+end
+local board_order = {
+    { name = "To Do", keys = { "DEMO-160", "DEMO-163" } },
+    { name = "In Progress", keys = { "DEMO-142", "DEMO-138" } },
+    { name = "Review", keys = { "DEMO-151" } },
+    { name = "Done", keys = { "DEMO-119", "DEMO-125" } },
+}
+expect_sections(state, board_order)
+
+-- A real load discovers the board through the sprint field. Several sprints
+-- on the same board must use one configuration and retain its column order.
+local board_search = table.clone(fixtures["search.json"])
+board_search.issues = {}
+for i, raw in fixtures["search.json"].issues do
+    local issue = table.clone(raw)
+    issue.fields = table.clone(raw.fields)
+    issue.fields.customfield_10020 = {
+        { id = if i % 2 == 0 then 78 else 77, name = "Sprint", state = "active", boardId = 17 },
+    }
+    table.insert(board_search.issues, issue)
+end
+reset()
+responses = { response(fixtures["fields.json"]), response(board_search), response(fixtures["board.json"]) }
+state = block.init(cx, {}, nil)
+assert(not state.problem and not state.signin and summaries.summary.count == 5)
+expect_sections(state, board_order)
+assert(#calls == 3, "duplicate board configuration request")
+
+-- Missing/inaccessible board metadata changes only order, not grouping.
+local fallback_order = {
+    { name = "Review", keys = { "DEMO-151" } },
+    { name = "To Do", keys = { "DEMO-160", "DEMO-163" } },
+    { name = "In Progress", keys = { "DEMO-142", "DEMO-138" } },
+    { name = "Done", keys = { "DEMO-119", "DEMO-125" } },
+}
+responses = { response(fixtures["fields.json"]), response(board_search), response({}, 403) }
+block.key(state, { name = "r" }, cx)
+assert(not state.problem and not state.signin and summaries.summary.count == 5)
+expect_sections(state, fallback_order)
+responses = { response(fixtures["fields.json"]), response(fixtures["search.json"]) }
+block.key(state, { name = "r" }, cx)
+expect_sections(state, fallback_order)
+
+-- A newly added workflow status is represented without changing plugin code.
+local extra = table.clone(board_search.issues[1])
+extra.key = "DEMO-200"
+extra.fields = table.clone(extra.fields)
+extra.fields.status = { id = "20000", name = "Ready for QA", statusCategory = { key = "indeterminate" } }
+table.insert(board_search.issues, extra)
+responses = { response(fixtures["fields.json"]), response(board_search), response(fixtures["board.json"]) }
+block.key(state, { name = "r" }, cx)
+local with_unmapped = table.clone(board_order)
+table.insert(with_unmapped, { name = "Ready for QA", keys = { "DEMO-200" } })
+expect_sections(state, with_unmapped)
+
+-- `hidden_statuses` drops issues by status name (case-insensitive) before they
+-- are grouped or counted; non-string entries are ignored; emptying it restores them.
+files["/data/config.json"] = tern.json.encode({ hidden_statuses = { "REVIEW", " ", 7, "done" } })
+responses = { response(fixtures["fields.json"]), response(fixtures["search.json"]) }
+block.key(state, { name = "r" }, cx)
+expect_sections(state, {
+    { name = "To Do", keys = { "DEMO-160", "DEMO-163" } },
+    { name = "In Progress", keys = { "DEMO-142", "DEMO-138" } },
+})
+assert(#state.issues == 4 and summaries.summary.count == 4 and block.title(state) == "Jira (4)")
+files["/data/config.json"] = tern.json.encode({ hidden_statuses = {} })
+responses = { response(fixtures["fields.json"]), response(fixtures["search.json"]) }
+block.key(state, { name = "r" }, cx)
+assert(#state.issues == 7 and summaries.summary.count == 5)
+
 state = block.init(cx, { "fixture", "signedout" }, nil)
 assert(state.signin == "missing" and summaries.fixture_summary.count == -1)
 state = block.init(cx, { "fixture", "empty" }, nil)
 assert(#state.issues == 0 and summaries.fixture_summary.count == 0)
 assert(block.view(state, cx).main.c[2].p.key == "empty")
-print("PASS: mixed estimates, pagination/dedup, optional fields, auth, cursor errors, liveness, HTTPS, offsets, refresh recovery, fixture states")
+print("PASS: mixed estimates, pagination/dedup, optional fields, auth, cursor errors, liveness, HTTPS, offsets, refresh recovery, fixture states, dynamic statuses, board ordering/dedup/fallback, hidden statuses")
 '''
     with tempfile.TemporaryDirectory(prefix="jira-smoke-") as tmp:
         path = Path(tmp) / "smoke.luau"
