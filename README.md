@@ -1,6 +1,11 @@
-# Jira
+# Tern Jira
 
-A public Tern plugin that shows issues assigned to you in active Jira Cloud sprints. It uses Jira Cloud REST API v3 with an Atlassian email and API token; no Jira CLI or company-specific setup is required.
+[![CI](https://github.com/charliemartin0/tern-jira/actions/workflows/ci.yml/badge.svg)](https://github.com/charliemartin0/tern-jira/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+Your Jira sprint, inside [Tern](https://docs.stencil.so/tern/). A read-only block for issues assigned to you, with status groups, sprint details and quick row actions.
+
+Works with Jira Cloud REST API v3 using your Atlassian email and API token. No Jira CLI, project key, board ID or company-specific setup is required.
 
 ![Jira issues in the active sprint](test/screenshots/issues.png)
 
@@ -9,6 +14,18 @@ A public Tern plugin that shows issues assigned to you in active Jira Cloud spri
 - Tern 0.6.0 or newer.
 - A Jira Cloud site and an Atlassian API token.
 - The Tern host (the session daemon, where panes run) must be able to reach your Jira site.
+
+## Install
+
+```sh
+git clone https://github.com/charliemartin0/tern-jira.git
+cd tern-jira
+tern plugin link .
+```
+
+Linking loads the plugin into the daemon and existing windows; **no Tern restart is needed to install it**. Choose **Open Jira** in the command palette (`plugin.jira.open`). Without credentials, the block shows a sign-in card. After the first successful load, `jira <n>` in the status line can also open or focus the block.
+
+Set up authentication below, then press `r` or **Refresh**. Host-side environment changes must reach the daemon, not just the shell in a tab.
 
 ## What it does
 
@@ -39,7 +56,9 @@ export JIRA_EMAIL="you@example.com"
 export JIRA_API_TOKEN="your-api-token"
 ```
 
-Restart the daemon after changing environment variables so its host-side plugin receives them. The token is only read from `JIRA_API_TOKEN`; it is never saved in `config.json`, logged, or included in a toast. Environment variables override the URL and email from config.
+The host-side plugin reads the daemon's environment, not the environment of a shell inside a tab. If the daemon was already running when you set these variables, restart it only when safe for your live panes so it receives the new environment. This is separate from installing the plugin, which does not need a restart.
+
+The token is only read from `JIRA_API_TOKEN`; it is never saved in `config.json`, logged, or included in a toast. Environment variables override the URL and email from config.
 
 Requests require HTTPS. A bare hostname or an explicit `http://` site URL is
 normalized to HTTPS before authentication is sent. URLs with embedded
@@ -74,16 +93,13 @@ Example (do not put an API token in this file):
 - Story points are omitted when the site has no supported story-point field or the field is not populated.
 - The plugin is read-only: transitions, comments, branch creation and sending issues to an agent are not implemented.
 
-## Install
+## Privacy
 
-From the checked-out plugin directory:
+- Credentials belong in your local daemon environment; the API token has no config-file fallback.
+- Site URL and email can be stored in your local plugin config, never in the checkout.
+- Fixtures, example addresses and issue keys are synthetic. Screenshot data comes from those fixtures, not a live Jira account.
+- Custom field IDs in fixtures are examples only. Live requests discover your site's field IDs instead of assuming a particular Jira project.
 
-```sh
-tern plugin link .
-tern plugin reload
-```
-
-Run `tern plugin types .` to regenerate `tern.d.luau` after a Tern update. Open the block with the **Open Jira** palette command (`plugin.jira.open`); the `jira <n>` status segment opens it too.
 
 ## Testing
 
@@ -125,6 +141,19 @@ mixed story-point fields, multi-page/deduplicated results, optional fields,
 auth failures, invalid cursors, closed panes, HTTPS, timezone offsets and
 sign-in/refresh recovery. It does not authenticate to a live Jira site.
 
+The **Plugin checks** GitHub Actions job compiles the four Luau modules and runs this regression harness on pushes and pull requests. It needs no Jira credentials or running Tern daemon; it is not a live Jira API or GUI test.
+
+Before contributing, run the regression harness and compile the modules:
+
+```sh
+luau-compile --null config.luau jira.luau host.luau window.luau
+python3 test/smoke.py --luau luau
+```
+
 Fixture screenshots in `test/screenshots/` (`issues.png`, `signin.png`,
 `empty.png`) are captured at 1920×1080. Run `tern plugin types .`
 to regenerate the checked-in SDK declarations.
+
+## License
+
+[MIT](LICENSE).
