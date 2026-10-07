@@ -276,12 +276,27 @@ local with_unmapped = table.clone(board_order)
 table.insert(with_unmapped, { name = "Ready for QA", keys = { "DEMO-200" } })
 expect_sections(state, with_unmapped)
 
+-- `hidden_statuses` drops issues by status name (case-insensitive) before they
+-- are grouped or counted; non-string entries are ignored; emptying it restores them.
+files["/data/config.json"] = tern.json.encode({ hidden_statuses = { "REVIEW", " ", 7, "done" } })
+responses = { response(fixtures["fields.json"]), response(fixtures["search.json"]) }
+block.key(state, { name = "r" }, cx)
+expect_sections(state, {
+    { name = "To Do", keys = { "DEMO-160", "DEMO-163" } },
+    { name = "In Progress", keys = { "DEMO-142", "DEMO-138" } },
+})
+assert(#state.issues == 4 and summaries.summary.count == 4 and block.title(state) == "Jira (4)")
+files["/data/config.json"] = tern.json.encode({ hidden_statuses = {} })
+responses = { response(fixtures["fields.json"]), response(fixtures["search.json"]) }
+block.key(state, { name = "r" }, cx)
+assert(#state.issues == 7 and summaries.summary.count == 5)
+
 state = block.init(cx, { "fixture", "signedout" }, nil)
 assert(state.signin == "missing" and summaries.fixture_summary.count == -1)
 state = block.init(cx, { "fixture", "empty" }, nil)
 assert(#state.issues == 0 and summaries.fixture_summary.count == 0)
 assert(block.view(state, cx).main.c[2].p.key == "empty")
-print("PASS: mixed estimates, pagination/dedup, optional fields, auth, cursor errors, liveness, HTTPS, offsets, refresh recovery, fixture states, dynamic statuses, board ordering/dedup/fallback")
+print("PASS: mixed estimates, pagination/dedup, optional fields, auth, cursor errors, liveness, HTTPS, offsets, refresh recovery, fixture states, dynamic statuses, board ordering/dedup/fallback, hidden statuses")
 '''
     with tempfile.TemporaryDirectory(prefix="jira-smoke-") as tmp:
         path = Path(tmp) / "smoke.luau"

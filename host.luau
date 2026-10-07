@@ -111,6 +111,25 @@ local function open_count(issues: { jira.Issue }): number
 	return n
 end
 
+-- Drops issues whose status name is in `hidden` (config `hidden_statuses`,
+-- case-insensitive), before anything is counted, titled or grouped.
+local function visible(issues: { jira.Issue }, hidden: { string }): { jira.Issue }
+	if #hidden == 0 then
+		return issues
+	end
+	local skip: { [string]: boolean } = {}
+	for _, name in hidden do
+		skip[string.lower(name)] = true
+	end
+	local out: { jira.Issue } = {}
+	for _, issue in issues do
+		if not skip[string.lower(issue.status)] then
+			table.insert(out, issue)
+		end
+	end
+	return out
+end
+
 local function publish(state: State, count: number)
 	pcall(tern.kv.set, if state.fixture then "fixture_summary" else "summary", { at = now(state), count = count })
 end
@@ -183,10 +202,11 @@ local function refresh(state: State)
 		end
 		state.loading = false
 		if result then
-			state.issues, state.sprints, state.ranks = result.issues, result.sprints, result.ranks
+			local issues = visible(result.issues, state.cfg.hidden_statuses)
+			state.issues, state.sprints, state.ranks = issues, result.sprints, result.ranks
 			state.fetched = now(state)
 			state.problem, state.signin = nil, nil
-			publish(state, open_count(result.issues))
+			publish(state, open_count(issues))
 		elseif problem and problem.kind == "auth" then
 			state.signin = "rejected"
 			state.issues = nil

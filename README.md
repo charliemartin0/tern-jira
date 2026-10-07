@@ -73,6 +73,7 @@ On first open, the plugin creates `config.json` in Tern's Jira plugin data direc
 | `base_url` | `""` | Jira Cloud site URL; overridden by `JIRA_BASE_URL`. A bare hostname is accepted. |
 | `email` | `""` | Atlassian account email; overridden by `JIRA_EMAIL`. |
 | `jql` | `"assignee = currentUser() AND sprint in openSprints() ORDER BY status, priority DESC, updated DESC"` | Search query sent to Jira. |
+| `hidden_statuses` | `[]` | Status names to leave out, matched case-insensitively against the issue's status name. Hidden issues have no section and are excluded from the block title and status-line counts. Non-string entries are ignored. Use `jql` instead to exclude them server-side. |
 | `poll_minutes` | `5` | Automatic refresh interval, clamped to 1–60 minutes. |
 
 Example (do not put an API token in this file):
@@ -82,6 +83,7 @@ Example (do not put an API token in this file):
   "base_url": "https://your-site.atlassian.net",
   "email": "you@example.com",
   "jql": "assignee = currentUser() AND sprint in openSprints() ORDER BY status, priority DESC, updated DESC",
+  "hidden_statuses": ["Rejected"],
   "poll_minutes": 5
 }
 ```
