@@ -1,0 +1,12 @@
+schema = 1
+id = "jira"
+name = "Jira"
+version = "0.1.0"
+description = "My assigned Jira issues in active sprints"
+icon = "ticket"
+host = "host.luau"
+window = "window.luau"
+
+[[blocks]]
+id = "issues"
+title = "Jira"

@@ -1,0 +1,90 @@
+{
+  "isLast": true,
+  "issues": [
+    {
+      "key": "DEMO-142",
+      "fields": {
+        "summary": "Add retry with backoff to the export worker",
+        "status": { "name": "In Progress", "statusCategory": { "key": "indeterminate", "name": "In Progress" } },
+        "priority": { "name": "High" },
+        "issuetype": { "name": "Story" },
+        "updated": "2026-10-07T09:41:12.000+0000",
+        "customfield_10002": 5,
+        "customfield_10020": [{ "id": 77, "name": "Sprint 24", "state": "active", "startDate": "2026-09-30T08:00:00.000Z", "endDate": "2026-10-14T16:00:00.000Z" }]
+      }
+    },
+    {
+      "key": "DEMO-151",
+      "fields": {
+        "summary": "Pagination returns duplicate rows when sorting by created date",
+        "status": { "name": "In Review", "statusCategory": { "key": "indeterminate", "name": "In Progress" } },
+        "priority": { "name": "Highest" },
+        "issuetype": { "name": "Bug" },
+        "updated": "2026-10-07T07:15:00.000+0000",
+        "customfield_10016": 3,
+        "customfield_10020": [{ "id": 77, "name": "Sprint 24", "state": "active", "startDate": "2026-09-30T08:00:00.000Z", "endDate": "2026-10-14T16:00:00.000Z" }]
+      }
+    },
+    {
+      "key": "DEMO-138",
+      "fields": {
+        "summary": "Document the webhook signature verification flow for partners and include a worked example with sample payloads",
+        "status": { "name": "In Progress", "statusCategory": { "key": "indeterminate", "name": "In Progress" } },
+        "priority": { "name": "Medium" },
+        "issuetype": { "name": "Task" },
+        "updated": "2026-10-05T14:20:00.000+0000",
+        "customfield_10016": 2,
+        "customfield_10020": [{ "id": 77, "name": "Sprint 24", "state": "active", "startDate": "2026-09-30T08:00:00.000Z", "endDate": "2026-10-14T16:00:00.000Z" }]
+      }
+    },
+    {
+      "key": "DEMO-160",
+      "fields": {
+        "summary": "Spike: evaluate columnar storage for the reporting tables",
+        "status": { "name": "To Do", "statusCategory": { "key": "new", "name": "To Do" } },
+        "priority": { "name": "Medium" },
+        "issuetype": { "name": "Spike" },
+        "updated": "2026-10-02T11:00:00.000+0000",
+        "customfield_10020": [{ "id": 77, "name": "Sprint 24", "state": "active", "startDate": "2026-09-30T08:00:00.000Z", "endDate": "2026-10-14T16:00:00.000Z" }]
+      }
+    },
+    {
+      "key": "DEMO-163",
+      "fields": {
+        "summary": "Rename the legacy `account_ref` column and backfill existing records",
+        "status": { "name": "To Do", "statusCategory": { "key": "new", "name": "To Do" } },
+        "priority": { "name": "Low" },
+        "issuetype": { "name": "Story" },
+        "updated": "2026-10-01T16:45:00.000+0000",
+        "customfield_10016": 8,
+        "customfield_10020": [{ "id": 77, "name": "Sprint 24", "state": "active", "startDate": "2026-09-30T08:00:00.000Z", "endDate": "2026-10-14T16:00:00.000Z" }]
+      }
+    },
+    {
+      "key": "DEMO-119",
+      "fields": {
+        "summary": "Upgrade the HTTP client library to the latest minor release",
+        "status": { "name": "Done", "statusCategory": { "key": "done", "name": "Done" } },
+        "priority": { "name": "Low" },
+        "issuetype": { "name": "Task" },
+        "updated": "2026-10-06T15:30:00.000+0000",
+        "customfield_10016": 1,
+        "customfield_10020": [{ "id": 77, "name": "Sprint 24", "state": "active", "startDate": "2026-09-30T08:00:00.000Z", "endDate": "2026-10-14T16:00:00.000Z" }]
+      }
+    },
+    {
+      "key": "DEMO-125",
+      "fields": {
+        "summary": "Fix the typo in the onboarding checklist email",
+        "status": { "name": "Done", "statusCategory": { "key": "done", "name": "Done" } },
+        "priority": { "name": "Lowest" },
+        "issuetype": { "name": "Bug" },
+        "updated": "2026-10-03T09:05:00.000+0000",
+        "customfield_10020": [
+          { "id": 76, "name": "Sprint 23", "state": "closed", "startDate": "2026-09-16T08:00:00.000Z", "endDate": "2026-09-30T16:00:00.000Z" },
+          { "id": 77, "name": "Sprint 24", "state": "active", "startDate": "2026-09-30T08:00:00.000Z", "endDate": "2026-10-14T16:00:00.000Z" }
+        ]
+      }
+    }
+  ]
+}
