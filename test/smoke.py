@@ -100,8 +100,10 @@ ui.row = function(children) return ui.node("row", {}, children) end
 ui.kv = function(items) return ui.node("kv", { items = items }) end
 ui.md = function(text) return ui.node("md", { text = text }) end
 ui.progress = function(value, label) return ui.node("progress", { value = value, label = label }) end
+local toasts = {}
 local cx = { pane = 1 }
 function cx:render() end
+function cx:toast(level, text) table.insert(toasts, { level = level, text = text }) end
 local function response(data, status)
     return { status = status or 200, body = tern.json.encode(data), headers = {} }
 end
@@ -291,12 +293,115 @@ responses = { response(fixtures["fields.json"]), response(fixtures["search.json"
 block.key(state, { name = "r" }, cx)
 assert(#state.issues == 7 and summaries.summary.count == 5)
 
+-- Status arrows: the nearest transition in board order, or in category order
+-- when the board is unknown; same-category statuses are never guessed.
+local offered
+jira.transitions(auth, "DEMO-1", true, function(list) offered = list end)
+assert(#offered == 4 and offered[3].status == "Review" and offered[3].category == "new" and offered[3].id == "31")
+local function pick(status_id, status, category, ranks, dir)
+    local t = jira.pick_transition(offered, { status_id = status_id, status = status, category = category }, ranks, dir)
+    return t and t.status
+end
+local board = { ["10002"] = 1, ["10000"] = 2, ["10001"] = 3, ["10003"] = 4 }
+assert(pick("10000", "In Progress", "indeterminate", board, 1) == "Review")
+assert(pick("10000", "In Progress", "indeterminate", board, -1) == "To Do")
+assert(pick("10003", "Done", "done", board, 1) == nil and pick("10002", "To Do", "new", board, -1) == nil)
+assert(pick("10001", "Review", "new", board, -1) == "In Progress")
+assert(pick("10000", "In Progress", "indeterminate", {}, 1) == "Done")
+assert(pick("10000", "In Progress", "indeterminate", {}, -1) == "To Do")
+assert(pick("10001", "Review", "new", {}, -1) == nil and pick("10001", "Review", "new", {}, 1) == "In Progress")
+
+local function status_of(state, key)
+    for _, issue in state.issues do if issue.key == key then return issue.status end end
+end
+local function click(state, act, key) block.event(state, { ev = "action", act = act, value = key }, cx) end
+reset()
+responses = { response(fixtures["fields.json"]), response(board_search), response(fixtures["board.json"]) }
+state = block.init(cx, {}, nil)
+local row_meta = block.view(state, cx).main.c[3].c[1].c[2].c
+assert(row_meta[1].p.actions.click == "move:prev=DEMO-142" and row_meta[2].p.text == "In Progress")
+assert(row_meta[3].p.actions.click == "move:next=DEMO-142")
+
+-- A successful move posts the transition, shows the new status at once and refreshes.
+local moved = table.clone(board_search)
+moved.issues = table.clone(board_search.issues)
+moved.issues[1] = table.clone(moved.issues[1])
+moved.issues[1].fields = table.clone(moved.issues[1].fields)
+moved.issues[1].fields.status = { id = "10001", name = "Review", statusCategory = { key = "new" } }
+reset()
+toasts = {}
+responses = {
+    response(fixtures["transitions.json"]), { status = 204, body = "", headers = {} },
+    response(fixtures["fields.json"]), response(moved), response(fixtures["board.json"]),
+}
+click(state, "move:next", "DEMO-142")
+assert(calls[1].url == "https://example.atlassian.net/rest/api/3/issue/DEMO-142/transitions" and calls[1].opts.method == "GET")
+assert(calls[2].opts.method == "POST" and calls[2].url == calls[1].url and calls[2].body.transition.id == "31")
+assert(#calls == 5 and status_of(state, "DEMO-142") == "Review" and not state.moving["DEMO-142"])
+assert(#toasts == 1 and toasts[1].level == "success" and toasts[1].text == "DEMO-142 → Review")
+
+-- Jira refusing the transition (e.g. a required field) leaves the issue alone and says why.
+reset()
+toasts = {}
+responses = { response(fixtures["transitions.json"]), response({ errors = { resolution = "Field 'resolution' is required" } }, 400) }
+click(state, "move:next", "DEMO-142")
+assert(#calls == 2 and status_of(state, "DEMO-142") == "Review" and not state.moving["DEMO-142"])
+assert(#toasts == 1 and toasts[1].level == "error" and string.find(toasts[1].text, "resolution", 1, true))
+
+-- Nothing after the last status, an unreadable transition list, and a click already in flight.
+reset()
+toasts = {}
+responses = { response(fixtures["transitions.json"]) }
+click(state, "move:next", "DEMO-119")
+assert(#calls == 1 and #toasts == 1 and toasts[1].text == "DEMO-119 has no status after Done" and not state.moving["DEMO-119"])
+responses = { response({}, 500) }
+click(state, "move:prev", "DEMO-119")
+assert(#toasts == 2 and string.find(toasts[2].text, "Could not read transitions for DEMO-119", 1, true))
+reset()
+state.moving["DEMO-138"] = true
+click(state, "move:prev", "DEMO-138")
+assert(#calls == 0)
+state.moving["DEMO-138"] = nil
+
+-- A 403 on transitions is a permission problem, not a sign-out; a bad key never reaches a URL;
+-- a key not in the list is ignored.
+reset()
+toasts = {}
+responses = { response({}, 403) }
+click(state, "move:next", "DEMO-119")
+assert(#calls == 1 and state.signin == nil and #toasts == 1 and string.find(toasts[1].text, "does not let this account", 1, true))
+reset()
+local bad
+jira.transition(auth, "../x", "1", false, function(p) bad = p end)
+assert(#calls == 0 and bad.kind == "parse")
+click(state, "move:next", "NOPE-1")
+assert(#calls == 0)
+
+-- A change made while a refresh is in flight triggers one more refresh once it finishes.
+reset()
+state.loading = true
+responses = { response(fixtures["transitions.json"]), { status = 204, body = "", headers = {} } }
+click(state, "move:prev", "DEMO-138")
+assert(#calls == 2 and state.stale)
+state.loading = false
+responses = { response(fixtures["fields.json"]), response(fixtures["search.json"]), response(fixtures["fields.json"]), response(fixtures["search.json"]) }
+block.key(state, { name = "r" }, cx)
+assert(#calls == 6 and not state.stale)
+
+-- Fixture mode moves locally without any request and keeps the status-line count in step.
+reset()
+state = block.init(cx, { "fixture" }, nil)
+click(state, "move:next", "DEMO-138")
+assert(status_of(state, "DEMO-138") == "Review" and summaries.fixture_summary.count == 5 and #calls == 0)
+click(state, "move:next", "DEMO-138")
+assert(status_of(state, "DEMO-138") == "Done" and summaries.fixture_summary.count == 4)
+
 state = block.init(cx, { "fixture", "signedout" }, nil)
 assert(state.signin == "missing" and summaries.fixture_summary.count == -1)
 state = block.init(cx, { "fixture", "empty" }, nil)
 assert(#state.issues == 0 and summaries.fixture_summary.count == 0)
 assert(block.view(state, cx).main.c[2].p.key == "empty")
-print("PASS: mixed estimates, pagination/dedup, optional fields, auth, cursor errors, liveness, HTTPS, offsets, refresh recovery, fixture states, dynamic statuses, board ordering/dedup/fallback, hidden statuses")
+print("PASS: mixed estimates, pagination/dedup, optional fields, auth, cursor errors, liveness, HTTPS, offsets, refresh recovery, fixture states, dynamic statuses, board ordering/dedup/fallback, hidden statuses, status arrows")
 '''
     with tempfile.TemporaryDirectory(prefix="jira-smoke-") as tmp:
         path = Path(tmp) / "smoke.luau"

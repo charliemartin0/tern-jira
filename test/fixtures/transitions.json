@@ -1,0 +1,8 @@
+{
+  "transitions": [
+    { "id": "11", "name": "To Do", "to": { "id": "10002", "name": "To Do", "statusCategory": { "key": "new" } } },
+    { "id": "21", "name": "Start", "to": { "id": "10000", "name": "In Progress", "statusCategory": { "key": "indeterminate" } } },
+    { "id": "31", "name": "Send to review", "to": { "id": "10001", "name": "Review", "statusCategory": { "key": "new" } } },
+    { "id": "41", "name": "Done", "to": { "id": "10003", "name": "Done", "statusCategory": { "key": "done" } } }
+  ]
+}
