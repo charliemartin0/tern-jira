@@ -3,7 +3,7 @@
 [![CI](https://github.com/charliemartin0/tern-jira/actions/workflows/ci.yml/badge.svg)](https://github.com/charliemartin0/tern-jira/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Your Jira sprint, inside [Tern](https://docs.stencil.so/tern/). A read-only block for issues assigned to you, with status groups, sprint details and quick row actions.
+Your Jira sprint, inside [Tern](https://docs.stencil.so/tern/). A block for issues assigned to you, with status groups, sprint details, quick row actions and arrows to move an issue between statuses.
 
 Works with Jira Cloud REST API v3 using your Atlassian email and API token. No Jira CLI, project key, board ID or company-specific setup is required.
 
@@ -30,6 +30,7 @@ Set up authentication below, then press `r` or **Refresh**. Host-side environmen
 - **Jira block**: issues matching the configured JQL, grouped by their actual Jira status names with a count per group. Custom statuses such as `Review` have their own sections, even when Jira categorizes them as `To Do`. Only statuses with matching issues are shown.
 - **Each row**: issue key and summary link on the first line; status, priority, issue type, story points when present, updated age and actions on a wrapping metadata line. Narrow panes keep the summary readable.
 - **Row actions**: Open in Jira and Copy key. The row actions use a small action registry in `host.luau` so additional actions can be added independently.
+- **Status arrows**: `←` and `→` on each row's metadata line, either side of the status badge, move the issue to the previous or next status. Clicking reads the transitions Jira offers for that issue (`GET /rest/api/3/issue/{key}/transitions`) and applies the nearest one in that direction (`POST` of the transition id). Direction follows the board column order the groups use; for statuses not on the board it falls back to category order (To Do → In Progress → Done), and a status in the same category as the current one is never guessed. The row shows `moving…` while the change is in flight, then the new status, a toast and a refresh. If there is no status in that direction, or Jira refuses (for example a transition that requires a field), a toast says so and the issue is unchanged. Only the transitions your workflow permits for you can be used; the arrows never skip to a status Jira does not offer.
 - **Header**: active sprint name(s) and end date when Jira includes them in the issue's sprint field, last updated time, `r` refresh hint and a Refresh button.
 - **Status line**: `jira <n>` for your non-done issues in the current result; click it to open or focus the Jira block.
 - **Sign-in card**: explains missing or rejected credentials, lists the required environment variables without exposing their values, and links to Atlassian's API-token page.
@@ -93,7 +94,7 @@ Example (do not put an API token in this file):
 - Jira Cloud only. Use a site-scoped API token without scopes for Basic auth against your site URL; tokens requiring the `api.atlassian.com/ex/jira/...` gateway are not supported.
 - Only active sprint names/end dates returned on matching issues are shown. Jira may omit sprint metadata from an issue response; in that case issue data still renders without sprint details.
 - Story points are omitted when the site has no supported story-point field or the field is not populated.
-- The plugin is read-only: transitions, comments, branch creation and sending issues to an agent are not implemented.
+- Status changes are one step at a time through Jira's transition list. Transitions that need input (a resolution or other screen fields) are refused by Jira and reported in a toast; open the issue in Jira for those. Comments, branch creation and sending issues to an agent are not implemented.
 
 ## Privacy
 
@@ -142,8 +143,9 @@ This executes the actual Luau modules with deterministic HTTP/UI boundaries:
 mixed story-point fields, multi-page/deduplicated results, optional fields,
 auth failures, invalid cursors, closed panes, HTTPS, timezone offsets,
 sign-in/refresh recovery, custom-status grouping (including `Review` in Jira's
-`To Do` category), and board ordering/deduplication/fallback. It does not
-authenticate to a live Jira site.
+`To Do` category), board ordering/deduplication/fallback, and status arrows
+(board/category direction, transition POST, refresh, Jira refusals, no-op edges,
+fixture mode). It does not authenticate to a live Jira site.
 
 The **Plugin checks** GitHub Actions job compiles the four Luau modules and runs this regression harness on pushes and pull requests. It needs no Jira credentials or running Tern daemon; it is not a live Jira API or GUI test.
 

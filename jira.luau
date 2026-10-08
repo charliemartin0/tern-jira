@@ -7,12 +7,14 @@
 local M = {}
 
 export type Auth = { base_url: string, email: string, token: string }
-export type Problem = { kind: "auth" | "network" | "http" | "parse", message: string }
+export type Problem = { kind: "auth" | "network" | "http" | "parse", message: string, status: number? }
 export type Issue = {
 	key: string, summary: string, url: string,
 	status: string, status_id: string?, category: "new" | "indeterminate" | "done",
 	priority: string, issue_type: string, points: string?, updated: number,
 }
+-- A workflow transition, as the status it leads to.
+export type Transition = { id: string, name: string, status: string, status_id: string?, category: "new" | "indeterminate" | "done" }
 export type Sprint = { id: number, name: string, ends: number?, board: number? }
 -- `ranks` maps a status id to its position in the sprint boards' column order.
 export type Result = { issues: { Issue }, sprints: { Sprint }, ranks: { [string]: number } }
@@ -102,14 +104,21 @@ local function request(auth: Auth, method: string, path: string, body: any?, don
 			if response.error then
 				done(nil, { kind = "network", message = if response.timed_out then "Jira did not answer within 30 seconds." else "Could not reach Jira: " .. response.error })
 			elseif response.status == 401 or response.status == 403 then
-				done(nil, { kind = "auth", message = "Jira rejected the email and API token." })
+				done(nil, { kind = "auth", status = response.status, message = "Jira rejected the email and API token." })
 			elseif response.status < 200 or response.status >= 300 then
 				local detail = ""
 				local ok, data = pcall(tern.json.decode, response.body)
-				if ok and type(data) == "table" and type(data.errorMessages) == "table" and type(data.errorMessages[1]) == "string" then
-					detail = " " .. data.errorMessages[1]
+				if ok and type(data) == "table" then
+					if type(data.errorMessages) == "table" and type(data.errorMessages[1]) == "string" then
+						detail = " " .. data.errorMessages[1]
+					elseif type(data.errors) == "table" then
+						local _, field_error = next(data.errors)
+						if type(field_error) == "string" then detail = " " .. field_error end
+					end
 				end
 				done(nil, { kind = "http", message = "Jira returned HTTP " .. response.status .. " for " .. method .. " " .. path .. "." .. detail })
+			elseif response.status == 204 then
+				done({}, nil)
 			else
 				local ok, data = pcall(tern.json.decode, response.body)
 				if not ok or type(data) ~= "table" then
@@ -316,6 +325,106 @@ function M.load(auth: Auth, jql: string, fixture: string?, done: (Result?, Probl
 			end)
 		end
 		page(nil)
+	end)
+end
+
+local CATEGORY_ORDER: { [string]: number } = { new = 1, indeterminate = 2, done = 3 }
+
+-- Each transition Jira offers, as the status it leads to. Transitions Jira
+-- marks unavailable, or that lack a target status, are dropped.
+local function parse_transitions(data: any): { Transition }?
+	if type(data.transitions) ~= "table" then return nil end
+	local out: { Transition } = {}
+	for _, raw in data.transitions do
+		if type(raw) ~= "table" or type(raw.id) ~= "string" or raw.isAvailable == false then continue end
+		local to = raw.to
+		if type(to) ~= "table" or type(to.name) ~= "string" then continue end
+		local cat = if type(to.statusCategory) == "table" then to.statusCategory.key else nil
+		table.insert(out, {
+			id = raw.id,
+			name = tostring(raw.name or to.name),
+			status = to.name,
+			status_id = if type(to.id) == "string" or type(to.id) == "number" then tostring(to.id) else nil,
+			category = if cat == "done" then "done" elseif cat == "indeterminate" then "indeterminate" else "new",
+		})
+	end
+	return out
+end
+
+-- Requests an issue's transitions resource. Rejects a malformed key before it
+-- reaches the path. A 403 here means the account may not see or apply
+-- transitions for the issue, not that the credentials are wrong, so it is not
+-- reported as an auth problem (which would read as being signed out).
+local function transitions_request(auth: Auth, method: string, key: string, body: any?, done: (any?, Problem?) -> ())
+	if not string.match(key, "^[%w_]+%-%d+$") then
+		done(nil, { kind = "parse", message = "\"" .. key .. "\" is not a Jira issue key." })
+		return
+	end
+	request(auth, method, "/rest/api/3/issue/" .. key .. "/transitions", body, function(data, problem)
+		if problem and problem.kind == "auth" and problem.status == 403 then
+			done(nil, { kind = "http", message = "Jira does not let this account change the status of " .. key .. " (HTTP 403)." })
+		else
+			done(data, problem)
+		end
+	end)
+end
+
+-- The transitions available for issue `key`. `fixture` reads
+-- test/fixtures/transitions.json instead of calling Jira.
+function M.transitions(auth: Auth, key: string, fixture: boolean, done: ({ Transition }?, Problem?) -> (), alive: (() -> boolean)?)
+	local function finish(data: any)
+		local list = if type(data) == "table" then parse_transitions(data) else nil
+		if list then
+			done(list, nil)
+		else
+			done(nil, { kind = "parse", message = "Jira's transitions response had no transition list." })
+		end
+	end
+	if fixture then
+		finish(read_fixture("transitions.json"))
+		return
+	end
+	transitions_request(auth, "GET", key, nil, function(data, problem)
+		if alive and not alive() then return end
+		if problem or not data then done(nil, problem) return end
+		finish(data)
+	end)
+end
+
+-- The transition that moves `issue` one status in direction `dir` (-1 back,
+-- 1 forward), or nil when there is none. Board column order (`ranks`) decides
+-- when both statuses are on the board; otherwise status category order does,
+-- and a status in the same category as the current one is never picked.
+-- Among candidates the nearest wins, ranked ones before category-only ones,
+-- ties going to the transition Jira lists first.
+function M.pick_transition(list: { Transition }, issue: Issue, ranks: { [string]: number }, dir: number): Transition?
+	local from_rank = if issue.status_id then ranks[issue.status_id] else nil
+	local best: Transition? = nil
+	local best_ranked, best_dist = false, 0
+	for _, t in list do
+		if t.status == issue.status or (t.status_id ~= nil and t.status_id == issue.status_id) then continue end
+		local rank = if from_rank and t.status_id then ranks[t.status_id] else nil
+		local from = if rank then from_rank :: number else CATEGORY_ORDER[issue.category]
+		local pos = if rank then rank else CATEGORY_ORDER[t.category]
+		if (pos - from) * dir <= 0 then continue end
+		local ranked, dist = rank ~= nil, math.abs(pos - from)
+		if best == nil or (ranked and not best_ranked) or (ranked == best_ranked and dist < best_dist) then
+			best, best_ranked, best_dist = t, ranked, dist
+		end
+	end
+	return best
+end
+
+-- Applies transition `id` to issue `key`. `fixture` changes nothing and
+-- succeeds. done(problem?).
+function M.transition(auth: Auth, key: string, id: string, fixture: boolean, done: (Problem?) -> (), alive: (() -> boolean)?)
+	if fixture then
+		done(nil)
+		return
+	end
+	transitions_request(auth, "POST", key, { transition = { id = id } }, function(_, problem)
+		if alive and not alive() then return end
+		done(problem)
 	end)
 end
 

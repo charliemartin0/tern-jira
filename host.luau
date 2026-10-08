@@ -1,7 +1,8 @@
 --!strict
 -- The `issues` block: my assigned Jira issues in the active sprint(s),
 -- grouped by Jira status (in board column order), refreshed on a timer.
--- Keys: r refresh.
+-- Keys: r refresh. Each row has ← → buttons that move its issue to the
+-- previous/next status (board column order) through Jira's transitions.
 -- Launch args (dev only): `fixture` reads test/fixtures instead of calling
 -- Jira; a second arg picks the variant: `signedout`, `empty` or `error`.
 
@@ -34,6 +35,12 @@ type State = {
 	cfg_error: string?,
 	timer: TimerHandle?,
 	ranks: { [string]: number },
+	auth: jira.Auth?,
+	-- Issue keys with a status change in flight.
+	moving: { [string]: boolean },
+	-- A status change landed while a refresh was in flight: that refresh may
+	-- predate it, so refresh again once it finishes.
+	stale: boolean,
 }
 
 -- A pane ID survives Restart; the state object identifies this block run.
@@ -155,6 +162,7 @@ local ROW_ACTIONS: { RowAction } = {
 	},
 }
 local ACTION_PREFIX = "row:"
+local MOVE_PREFIX = "move:"
 
 -- ---------- refresh ----------
 local schedule: (State) -> ()
@@ -182,6 +190,7 @@ local function refresh(state: State)
 		auth = resolved.auth
 		state.missing = resolved.missing
 	end
+	state.auth = auth
 
 	if not auth then
 		state.loading = false
@@ -216,6 +225,10 @@ local function refresh(state: State)
 		end
 		state.cx:render()
 		schedule(state)
+		if state.stale then
+			state.stale = false
+			refresh(state)
+		end
 	end
 
 	if state.variant == "error" then
@@ -249,11 +262,19 @@ local PRIORITY_STYLE: { [string]: string } = {
 
 
 local function issue_row(state: State, issue: jira.Issue): Node
-	local meta: { Node } = {
-		ui.badge(issue.status, STATUS_TONE[issue.category]),
-		ui.text({ ui.span(issue.priority, PRIORITY_STYLE[string.lower(issue.priority)]) }),
-		ui.text({ ui.span(issue.issue_type, "muted") }),
-	}
+	local meta: { Node } = {}
+	local moving = state.moving[issue.key]
+	if not moving then
+		table.insert(meta, button("←", MOVE_PREFIX .. "prev=" .. issue.key, "neutral"))
+	end
+	table.insert(meta, ui.badge(issue.status, STATUS_TONE[issue.category]))
+	if not moving then
+		table.insert(meta, button("→", MOVE_PREFIX .. "next=" .. issue.key, "neutral"))
+	else
+		table.insert(meta, ui.text({ ui.span("moving…", "muted") }))
+	end
+	table.insert(meta, ui.text({ ui.span(issue.priority, PRIORITY_STYLE[string.lower(issue.priority)]) }))
+	table.insert(meta, ui.text({ ui.span(issue.issue_type, "muted") }))
 	if issue.points then table.insert(meta, ui.text({ ui.span(issue.points .. " pt", "num") })) end
 	table.insert(meta, ui.text({ ui.span("updated " .. age(state, issue.updated) .. " ago", "muted") }))
 	for _, action in ROW_ACTIONS do
@@ -416,6 +437,67 @@ local function find_issue(state: State, key: string): jira.Issue?
 	return nil
 end
 
+-- Moves `issue` one status back (dir -1) or forward (dir 1): reads the
+-- transitions Jira offers, applies the nearest one in that direction, then
+-- updates the row and refreshes. Failures toast and leave the issue as it was.
+local function move(state: State, issue: jira.Issue, dir: number)
+	local auth = state.auth
+	local key = issue.key
+	if not auth or state.moving[key] then
+		return
+	end
+	state.moving[key] = true
+	state.cx:render()
+	local function fail(text: string)
+		state.moving[key] = nil
+		state.cx:render()
+		state.cx:toast("error", text)
+	end
+	local function live(): boolean
+		return alive(state)
+	end
+	jira.transitions(auth, key, state.fixture, function(list, problem)
+		if not alive(state) then return end
+		if not list then
+			fail("Could not read transitions for " .. key .. ": " .. (if problem then problem.message else "unknown error"))
+			return
+		end
+		local current = find_issue(state, key)
+		if not current then
+			fail(key .. " is no longer in the list")
+			return
+		end
+		local target = jira.pick_transition(list, current, state.ranks, dir)
+		if not target then
+			fail(key .. " has no status " .. (if dir < 0 then "before " else "after ") .. current.status)
+			return
+		end
+		jira.transition(auth, key, target.id, state.fixture, function(failure)
+			if not alive(state) then return end
+			if failure then
+				fail("Could not move " .. key .. " to " .. target.status .. ": " .. failure.message)
+				return
+			end
+			state.moving[key] = nil
+			local landed = find_issue(state, key)
+			if landed and state.issues then
+				landed.status, landed.status_id, landed.category = target.status, target.status_id, target.category
+				publish(state, open_count(state.issues))
+			end
+			state.cx:render()
+			state.cx:toast("success", key .. " → " .. target.status)
+			if state.fixture then
+				return
+			end
+			if state.loading then
+				state.stale = true
+			else
+				refresh(state)
+			end
+		end, live)
+	end, live)
+end
+
 tern.block.define("issues", {
 	init = function(cx: BlockCx, args: { string }, _saved: any): State
 		local previous = running[cx.pane]
@@ -439,6 +521,9 @@ tern.block.define("issues", {
 			cfg_error = cfg_error,
 			timer = nil,
 			ranks = {},
+			auth = nil,
+			moving = {},
+			stale = false,
 		}
 		running[cx.pane] = state
 		refresh(state)
@@ -493,6 +578,12 @@ tern.block.define("issues", {
 			refresh(state)
 		elseif act == "token" then
 			cx:open(TOKEN_URL)
+		elseif string.sub(act, 1, #MOVE_PREFIX) == MOVE_PREFIX and type(ev.value) == "string" then
+			local issue = find_issue(state, ev.value :: string)
+			local direction = string.sub(act, #MOVE_PREFIX + 1)
+			if issue and (direction == "prev" or direction == "next") then
+				move(state, issue, if direction == "prev" then -1 else 1)
+			end
 		elseif string.sub(act, 1, #ACTION_PREFIX) == ACTION_PREFIX and type(ev.value) == "string" then
 			local issue = find_issue(state, ev.value :: string)
 			if issue then
